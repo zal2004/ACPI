@@ -6,6 +6,9 @@ from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted, check_X_y, column_or_1d, check_array, as_float_array, \
     check_consistent_length
 from scipy.sparse import csr_matrix
+
+from quantile_forest import RandomForestQuantileRegressor
+
 import scipy.sparse as sp
 import networkx as nx
 from community import community_louvain
@@ -23,32 +26,21 @@ logger = logging.getLogger('acpi')
 class QuantileRandomForest:
     def __init__(self, n_estimators=100, max_depth=None, min_samples_split=2,
                  bootstrap=True, random_state=None, max_features=None):
-        self.n_estimators = n_estimators
-        self.max_depth = max_depth
-        self.min_samples_split = min_samples_split
-        self.bootstrap = bootstrap
-        self.random_state = random_state
-        self.max_features = max_features
-        self.estimators_ = []
+        self.qrf = RandomForestQuantileRegressor(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_split=min_samples_split,
+            bootstrap=bootstrap,
+            random_state=random_state,
+            max_features=max_features
+        )
 
     def fit(self, X, y):
-        self.estimators_ = []
-        for i in range(self.n_estimators):
-            estimator = ExtraTreesRegressor(
-                n_estimators=1,
-                max_depth=self.max_depth,
-                min_samples_split=self.min_samples_split,
-                bootstrap=self.bootstrap,
-                random_state=self.random_state + i if self.random_state else None,
-                max_features=self.max_features
-            )
-            estimator.fit(X, y)
-            self.estimators_.append(estimator)
+        self.qrf.fit(X, y)
         return self
 
     def predict_quantiles(self, X, quantiles):
-        predictions = np.array([est.predict(X) for est in self.estimators_])
-        return np.quantile(predictions, quantiles, axis=0).T
+        return self.qrf.predict(X, quantiles=quantiles)
 
 class ACPI:
     def __init__(
