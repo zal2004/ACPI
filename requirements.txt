@@ -1,7 +1,7 @@
 scipy
 tqdm
 Cython
-numpy < 1.22
+numpy
 scikit-learn
 pandas
 pytest

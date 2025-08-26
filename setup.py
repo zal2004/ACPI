@@ -1,35 +1,46 @@
-from pathlib import Path
-from Cython.Distutils import build_ext
+from setuptools import setup, find_packages, Extension
 from Cython.Build import cythonize
 import numpy
-# from setuptools import setup, Extension # for pypi build
-from distutils.core import setup, Extension  # python setup
+import sys
+import platform
 
-c_ext = Extension('cext_acpi', sources=['acpi/cext_acpi/_cext.cc'])
+# Platform-specific compiler arguments
+extra_compile_args = []
+extra_link_args = []
 
-cy_ext = Extension('cyext_acpi', ['acpi/cyext_acpi/cyext_acpi.pyx'], extra_compile_args=['-fopenmp'],
-                   extra_link_args=['-fopenmp'])
+if platform.system() == 'Windows':
+    # Windows-specific settings
+    extra_compile_args = ['/openmp'] if sys.platform == 'win32' else ['-fopenmp']
+    extra_link_args = [] if sys.platform == 'win32' else ['-fopenmp']
+else:
+    # Unix-like systems
+    extra_compile_args = ['-fopenmp']
+    extra_link_args = ['-fopenmp']
 
-this_directory = Path(__file__).parent
-long_description = (this_directory/"README.md").read_text()
+# Define the Cython extension
+extensions = [
+    Extension(
+        'cyext_acpi',
+        ['acpi/cyext_acpi/cyext_acpi.pyx'],
+        include_dirs=[numpy.get_include()],
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
+        define_macros=[('CYTHON_TRACE_NOGIL', '1')]
+    )
+]
 
-setup(name='ACPI',
-      author='Salim I. Amoukou',
-      author_email='salim.ibrahim-amoukou@universite-paris-saclay.fr',
-      version='0.0.1',
-      description='Adaptive Conformal Prediction (ACP) is a Python package that aims to provide Adaptive Predictive '
-                  'Interval (PI) that better represent the uncertainty of the model by reweighting the NonConformal '
-                  'Score with the learned weights of a Random Forest.',
-      long_description=long_description,
-      long_description_content_type="text/markdown",
-      url='ano',
-      include_dirs=[numpy.get_include()],
-      cmdclass={'build_ext': build_ext},
-      ext_modules=cythonize([cy_ext, c_ext]),
-      setup_requires=["setuptools", "wheel", "numpy<1.22", "Cython", "pybind11"],
-      install_requires=['numpy<1.22', 'scipy', 'scikit-learn', 'pandas', 'tqdm', 'skranger', 'pybind11', 'PyGenStability@git+https://github.com/barahona-research-group/PyGenStability.git'],
-      extras_require={'test': ['xgboost', 'lightgbm', 'catboost', 'pyspark', 'pytest', 'mapie']},
-      packages=['acpi', 'acpi.datasets'],
-      license='MIT',
-      zip_safe=False
-      )
+setup(
+    name='acpi',
+    version='0.1.0',
+    packages=find_packages(),
+    ext_modules=cythonize(extensions, compiler_directives={'linetrace': True, 'binding': True}),
+    include_dirs=[numpy.get_include()],
+    install_requires=[
+        'numpy',
+        'scipy',
+        'scikit-learn',
+        'cython',
+        'tqdm'
+    ],
+    python_requires='>=3.7',
+)
