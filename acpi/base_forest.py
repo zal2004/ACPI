@@ -1,4 +1,4 @@
-import cext_acpi
+import cyext_acpi as cext_acpi
 from .utils import safe_isinstance, get_partition
 import numpy as np
 from tqdm import tqdm
@@ -44,14 +44,21 @@ class BaseAgnosTree:
                           e in model.estimators_]
             self.tree_output = "probability"
 
-        elif safe_isinstance(model, ["skranger.ensemble.regressor.RangerForestRegressor"]):
+
+        # Replace the skranger checks with sklearn equivalents:
+
+        elif safe_isinstance(model, ["sklearn.ensemble.forest.RandomForestRegressor", "sklearn.ensemble._forest.RandomForestRegressor"]):
+
             assert hasattr(model, "estimators_"), "Model has no `estimators_`! Have you called `model.fit`?"
+
             self.internal_dtype = model.estimators_[0].tree_.value.dtype.type
+
             self.input_dtype = np.float32
-            scaling = 1.0 / len(model.estimators_)  # output is average of trees
-            # self.scaling = scaling
-            self.trees = [SingleTree(e.tree_, scaling=scaling, data=data, data_missing=data_missing) for e in
-                          model.estimators_]
+
+            scaling = 1.0 / len(model.estimators_)
+
+            self.trees = [SingleTree(e.tree_, scaling=scaling, data=data, data_missing=data_missing) for e in model.estimators_]
+
             self.tree_output = "raw_value"
 
         else:

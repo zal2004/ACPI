@@ -1,12 +1,14 @@
 import numpy as np
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
+
 import cyext_acpi
-from skranger.ensemble import RangerForestRegressor
 from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted, check_X_y, column_or_1d, check_array, as_float_array, \
     check_consistent_length
 from scipy.sparse import csr_matrix
 import scipy.sparse as sp
-import pygenstability
+import networkx as nx
+from community import community_louvain
 from tqdm import tqdm
 import logging
 from .base_forest import *
@@ -17,6 +19,36 @@ from .utils import classifier_score, quantile_score, mean_score, compute_coverag
 
 global logger
 logger = logging.getLogger('acpi')
+
+class QuantileRandomForest:
+    def __init__(self, n_estimators=100, max_depth=None, min_samples_split=2,
+                 bootstrap=True, random_state=None, max_features=None):
+        self.n_estimators = n_estimators
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.bootstrap = bootstrap
+        self.random_state = random_state
+        self.max_features = max_features
+        self.estimators_ = []
+
+    def fit(self, X, y):
+        self.estimators_ = []
+        for i in range(self.n_estimators):
+            estimator = ExtraTreesRegressor(
+                n_estimators=1,
+                max_depth=self.max_depth,
+                min_samples_split=self.min_samples_split,
+                bootstrap=self.bootstrap,
+                random_state=self.random_state + i if self.random_state else None,
+                max_features=self.max_features
+            )
+            estimator.fit(X, y)
+            self.estimators_.append(estimator)
+        return self
+
+    def predict_quantiles(self, X, quantiles):
+        predictions = np.array([est.predict(X) for est in self.estimators_])
+        return np.quantile(predictions, quantiles, axis=0).T
 
 class ACPI:
     def __init__(
@@ -151,37 +183,23 @@ class ACPI:
         self.model_reject = None
         self.check_is_reject_fitted = False
 
-        self.model = RangerForestRegressor(n_estimators=self.n_estimators,
-                                           verbose=self.verbose,
-                                           mtry=self.mtry,
-                                           importance=self.importance,
-                                           min_node_size=self.min_node_size,
-                                           max_depth=self.max_depth,
-                                           replace=self.replace,
-                                           sample_fraction=self.sample_fraction,
-                                           keep_inbag=self.keep_inbag,
-                                           inbag=self.inbag,
-                                           split_rule=self.split_rule,
-                                           num_random_splits=self.num_random_splits,
-                                           seed=self.seed,
-                                           enable_tree_details=True,
-                                           quantiles=True)
+        self.model = RandomForestRegressor(
+            n_estimators=self.n_estimators,
+            max_depth=self.max_depth,
+            min_samples_split=self.min_node_size,
+            bootstrap=self.replace,
+            random_state=self.seed,
+            max_features=self.mtry if self.mtry > 0 else None
+        )
 
-        self.qrf = RangerForestRegressor(n_estimators=self.n_estimators,
-                                         verbose=self.verbose,
-                                         mtry=self.mtry,
-                                         importance=self.importance,
-                                         min_node_size=self.min_node_size,
-                                         max_depth=self.max_depth,
-                                         replace=self.replace,
-                                         sample_fraction=self.sample_fraction,
-                                         keep_inbag=self.keep_inbag,
-                                         inbag=self.inbag,
-                                         split_rule=self.split_rule,
-                                         num_random_splits=self.num_random_splits,
-                                         seed=self.seed,
-                                         enable_tree_details=True,
-                                         quantiles=True)
+        self.qrf = QuantileRandomForest(
+            n_estimators=self.n_estimators,
+            max_depth=self.max_depth,
+            min_samples_split=self.min_node_size,
+            bootstrap=self.replace,
+            random_state=self.seed,
+            max_features=self.mtry if self.mtry > 0 else None
+        )
 
     def fit(self, X, y, nonconformity_func=None, sample_weight=None, split_select_weights=None,
             always_split_features=None, categorical_features=None):
@@ -234,8 +252,9 @@ class ACPI:
             self.nonconformity_score = mean_score
 
         self.d = X.shape[1]
-        self.model.fit(X=X, y=r_fit, sample_weight=sample_weight, split_select_weights=split_select_weights,
-                       always_split_features=always_split_features, categorical_features=categorical_features)
+
+        # Only pass parameters supported by scikit-learn's RandomForestRegressor
+        self.model.fit(X=X, y=r_fit, sample_weight=sample_weight)
 
         for i in range(len(self.model.estimators_)):
             self.depth[i] = self.model.estimators_[i].get_depth()
@@ -378,11 +397,10 @@ class ACPI:
             if s > 1:
                 self.communities = communities
             else:
-                self.all_results = pygenstability.run(weights_csr, constructor=constructor,
-                                                      min_scale=min_scale, max_scale=max_scale,
-                                                      n_scale=n_scale, n_tries=n_tries,
-                                                      method=method)
-                self.communities = self.all_results['community_id'][-1]
+                G = nx.from_scipy_sparse_array(weights_csr)
+                self.communities = community_louvain.best_partition(G)
+                # Convert dict values to array
+                self.communities = np.array([self.communities[i] for i in range(len(self.communities))])
 
             self.x_cali_bygroup = []
             self.r_cali_bygroup = []
@@ -566,9 +584,10 @@ class ACPI:
             ndarray of shape (n_samples,) that corresponds the corrected terms or the adapted quantiles.
         """
         check_is_qrf_calibration(self)
+        check_is_qrf_calibration(self)
         if quantile is None:
-            return self.qrf.predict_quantiles(x_test, quantiles=[self.alpha_star])
-        return self.qrf.predict_quantiles(x_test, quantiles=[quantile]), None
+            return self.qrf.predict_quantiles(x_test, quantiles=[self.alpha_star]).flatten()
+        return self.qrf.predict_quantiles(x_test, quantiles=[quantile]).flatten()
 
     def predict_rf_lcp(self, x_test, quantile):
         """Compute the correction term for LCP-RF (marginal coverage).
