@@ -2,6 +2,9 @@ import sys
 import numpy as np
 import pickle
 
+import pandas as pd
+import xgboost as xgb
+
 
 def safe_isinstance(obj, class_path_str):
     """
@@ -620,3 +623,80 @@ def check_is_training_conditional_bygroup(estimator):
 def check_is_reject_fitted(estimator):
     if not estimator.check_is_reject_fitted:
         raise ValueError('You need to fit the reject option by calling fit_reject')
+
+class XGBoostACPIWrapper:
+    """ACPI wrapper for an XGBoost model."""
+
+    def __init__(self, model):
+        self.model = model
+
+    def predict(self, X):
+        """Predict using the XGBoost model, handling DMatrix conversion."""
+        dmatrix = xgb.DMatrix(X)
+        return self.model.predict(dmatrix)
+
+def build_lag_supervised(features, target, context_length):
+    X_list, y_list = [], []
+    for i in range(len(target) - context_length):
+        X_window = features[i:i + context_length].reshape(-1)
+        y_val = target[i + context_length]
+        X_list.append(X_window)
+        y_list.append(y_val)
+    return np.vstack(X_list).astype(np.float32), np.array(y_list, dtype=np.float32)
+
+def read_bike_data(path):
+    df = pd.read_csv(path, parse_dates=["datetime"])
+
+    season = pd.get_dummies(df['season'], prefix='season')
+    df = pd.concat([df, season], axis=1)
+
+    weather = pd.get_dummies(df['weather'], prefix='weather')
+    df = pd.concat([df, weather], axis=1)
+
+    df.drop(['season', 'weather'], axis=1, inplace=True)
+
+    dt_index = pd.DatetimeIndex(df.datetime)
+    df['hour'] = dt_index.hour
+    df['day'] = dt_index.dayofweek
+    df['month'] = dt_index.month
+    df['year'] = dt_index.year.map({2011: 0, 2012: 1})
+
+    df.drop('datetime', axis=1, inplace=True)
+
+    # Drop train-only columns if present
+    drop_cols = [c for c in ['casual', 'registered'] if c in df.columns]
+    if drop_cols:
+        df.drop(columns=drop_cols, inplace=True)
+
+    return df
+
+from typing import Tuple, Dict
+import numpy as np
+
+def plot_acpi_predictions(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_lower: np.ndarray,
+    y_upper: np.ndarray,
+    n_plot: int = 200,
+    title: str = None,
+    show: bool = True
+):
+    import matplotlib.pyplot as plt
+
+    n = int(min(n_plot, len(y_true)))
+    idx = np.arange(n)
+
+    fig, ax = plt.subplots(figsize=(15, 6))
+    ax.plot(idx, y_true[:n], label="True", color="black", linewidth=1)
+    ax.plot(idx, y_pred[:n], label="XGBoost Mean", color="orange", linewidth=1)
+    ax.fill_between(idx, y_lower[:n], y_upper[:n], color="steelblue", alpha=0.4, label="ACPI Prediction Interval")
+    ax.set_title(title or "ACPI Prediction Intervals")
+    ax.set_xlabel("Time Step")
+    ax.set_ylabel("Count")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    if show:
+        plt.show()
+    return fig, ax
+
